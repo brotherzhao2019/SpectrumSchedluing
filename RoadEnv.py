@@ -1,6 +1,8 @@
 import gym
 import numpy as np
 import queue
+import matplotlib.pyplot as plt
+
 
 class Car(object):
     def __init__(self, lane, car_id=None):
@@ -25,24 +27,25 @@ class Car(object):
         if self.active:
             self.pos += self.v * time
 
+
 class Road(gym.Env):
     def __init__(self, N, M):
         #np.seed(0)
         self.car_num_max = N
         self.freq_num = M
-        self.d_max = 120.
+        self.d_max = 100.
         self.d_min = 60.
-        self.max_pass_cars_num = 100
+        self.max_pass_cars_num = 30
         self.road_len = self.d_min * (self.car_num_max - 1) + 50.
-        self.rho = 1.0 / 50.0
+        #self.rho = 1.0 / 50.0
         self.car_dis_mean = 50.
-        self.g_opposite = .2
+        self.g_opposite = .1
         self.g_same = .02
         self.d_i = 40.                                                                # minimum interfering distance
         self.L = 8.
         sin_phi = self.L / np.sqrt(self.L ** 2 + 30. ** 2)
         self.P0 = 1e4
-        self.N0 = 1/20 * self.P0 * self.g_opposite / (30. ** 2 + self.L ** 2) \
+        self.N0 = 1/10 * self.P0 * self.g_opposite / (30. ** 2 + self.L ** 2) \
                   * (np.sin(0.5*np.pi*sin_phi)/(np.pi*sin_phi))**2
         self.d_same = np.sqrt(self.g_same*self.P0/self.N0)
         self.INR_upperbound = 10.
@@ -52,7 +55,7 @@ class Road(gym.Env):
         self.r_var = 0.1
         self.time = 0.
         self.ts = .1
-        self.stop_time = self.road_len / self.v2_const
+        self.stop_time = 2 * self.road_len / abs(self.v2_const)
         self.cars_line1 = []
         self.cars_line2 = []
         self.cars_line1_wait_q = queue.Queue(maxsize=self.car_num_max)              #todo: Clear the following 4 queue while env is done.
@@ -174,8 +177,8 @@ class Road(gym.Env):
             self.cars_line2[self.car_begin_idx_line2].f = 0
             self.next_car_interval_line2 = self.cars_interval_line2.get()
 
-    def _calculate_inference(self):
-        # calculate the inference the cars in the lane1 receive
+    def _calculate_interference(self):
+        # calculate the interference the cars in the lane1 receive
         for i, this_car in enumerate(self.cars_line1):
             if this_car.active:
                 this_car.I = 0.
@@ -189,8 +192,9 @@ class Road(gym.Env):
                             sin_phi = self.L / np.sqrt(self.L ** 2 + (car.pos - this_car.pos) ** 2)
                             this_car.I += self.P0 * self.g_opposite / ((car.pos - this_car.pos) ** 2 + self.L**2)\
                                                  * (np.sin(0.5*np.pi*sin_phi)/(np.pi*sin_phi))**2
+                this_car.I = this_car.I / self.N0
                 this_car.R = float(this_car.I <= self.INR_threshold)
-        # calculate the inference the cars in the lane2 receive
+        # calculate the interference the cars in the lane2 receive
         for i, this_car in enumerate(self.cars_line2):
             if this_car.active:
                 this_car.I = 0.
@@ -204,6 +208,7 @@ class Road(gym.Env):
                             sin_phi = self.L / np.sqrt(self.L ** 2 + (car.pos - this_car.pos) ** 2)
                             this_car.I += self.P0 * self.g_opposite / ((car.pos - this_car.pos) ** 2 + self.L**2)\
                                                  * (np.sin(0.5*np.pi*sin_phi)/(np.pi*sin_phi))**2
+                this_car.I = this_car.I / self.N0
                 this_car.R = float(this_car.I <= self.INR_threshold)
 
     def _real_pos(self, idx, line):
@@ -270,6 +275,7 @@ class Road(gym.Env):
             obs[i, :] = self._car_state(i, 1)
         for i in range(self.car_num_max):
             obs[i + self.car_num_max, :] = self._car_state(i, 2)
+        return obs
 
     def _get_reward(self):
         '''
@@ -320,7 +326,7 @@ class Road(gym.Env):
         self._get_car_dist_list()
         self._init_car_pos_v()
         self.time = 0.
-        self._calculate_inference()
+        self._calculate_interference()
         return self._observe()
 
     def step(self, action):
@@ -331,20 +337,51 @@ class Road(gym.Env):
         '''
         # step 1: set freq of cars
         for i, car in enumerate(self.cars_line1):
-            car.f = action[i]
+            car.f = int(action[i])
         for i, car in enumerate(self.cars_line2):
-            car.f = action[i + self.car_num_max]
+            car.f = int(action[i + self.car_num_max])
         # step 2:move cars
         self._move_cars()
         self.time += self.ts
         # step 3:calculate interference
-        self._calculate_inference()
+        self._calculate_interference()
         # obs
         obs = self._observe()
         rew = self._get_reward()
         done = True if self.time > self.stop_time else False
-        info = {}
+        num_cars_1, num_cars_2 = 0, 0
+        for car in self.cars_line1:
+            num_cars_1 += (1 if car.active else 0)
+        for car in self.cars_line2:
+            num_cars_2 += (1 if car.active else 0)
+        info = {'num_cars_line1': num_cars_1, 'num_cars_line2': num_cars_2}
         return obs, rew, done, info
+
+    def render(self, mode='human'):
+        marker = ['^', 'o']
+        color = ['red', 'green', 'blue', 'purple']
+        plt.ion()
+        plt.plot(np.linspace(0, self.road_len, 1000), 2.5 * np.ones(1000), 'black')
+        plt.plot(np.linspace(0, self.road_len, 1000), 1.5 * np.ones(1000), 'black')
+        plt.plot(np.linspace(0, self.road_len, 1000), 0.5 * np.ones(1000), 'black')
+
+        for i in range(self.car_num_max):
+            this_car = self.cars_line1[i]
+            if this_car.active:
+                plt.plot(this_car.pos, 2, color=color[int(this_car.f)], marker=marker[int(this_car.R)], markersize=10)
+
+        for i in range(self.car_num_max):
+            this_car = self.cars_line2[i]
+            if this_car.active:
+                plt.plot(this_car.pos, 1, color=color[int(this_car.f)], marker=marker[int(this_car.R)], markersize=10)
+
+        plt.xlim(0-50, self.road_len+50)
+        plt.ylim(0.4-3, 2.6+3)
+        plt.pause(1)
+        plt.close()
+
+
+
 
 
 
