@@ -68,6 +68,8 @@ class Road(gym.Env):
         self.car_end_idx_line2 = None
         self.next_car_interval_line1 = None
         self.next_car_interval_line2 = None
+        self.is_completed = None
+        self.alive_mask = None
         for i in range(self.car_num_max):
             self.cars_line1.append(Car(1, i))
             self.cars_line2.append(Car(2, i))
@@ -156,9 +158,11 @@ class Road(gym.Env):
         if self.cars_line1[self.car_end_idx_line1].pos > self.road_len:
             self.cars_line1_wait_q.put(self.car_end_idx_line1)
             self.cars_line1[self.car_end_idx_line1].clear()
+            self.is_completed[self.car_end_idx_line1] = 1
         if self.cars_line2[self.car_end_idx_line2].pos < 0:
             self.cars_line2_wait_q.put(self.car_end_idx_line2)
             self.cars_line2[self.car_end_idx_line2].clear()
+            self.is_completed[self.car_num_max + self.car_end_idx_line2] = 1
         # add cars into road
         assert self.cars_line1[self.car_begin_idx_line1].active
         assert self.cars_line2[self.car_begin_idx_line2].active
@@ -176,6 +180,13 @@ class Road(gym.Env):
             self.cars_line2[self.car_begin_idx_line2].v = self.v2_const
             self.cars_line2[self.car_begin_idx_line2].f = 0
             self.next_car_interval_line2 = self.cars_interval_line2.get()
+        #update alive car mask
+        for idx, car in enumerate(self.cars_line1):
+            if car.active:
+                self.alive_mask[idx] = 1
+        for idx, car in enumerate(self.cars_line2):
+            if car.active:
+                self.alive_mask[self.car_num_max + idx] = 1
 
     def _calculate_interference(self):
         # calculate the interference the cars in the lane1 receive
@@ -282,17 +293,22 @@ class Road(gym.Env):
         Get the reward of each car.
         :return:
         '''
-        num_active_car = 0
-        sum_rew = 0
-        for car in self.cars_line1:
-            if car.active:
-                num_active_car += 1
-                sum_rew += car.R
-        for car in self.cars_line2:
-            if car.active:
-                num_active_car += 1
-                sum_rew += car.R
-        return sum_rew / num_active_car
+        #num_active_car = 0
+        #sum_rew = 0
+        rew = np.zeros(2 * self.car_num_max)
+        # for car in self.cars_line1:
+        #     if car.active:
+        #         num_active_car += 1
+        #         sum_rew += car.R
+        # for car in self.cars_line2:
+        #     if car.active:
+        #         num_active_car += 1
+        #         sum_rew += car.R
+        for i, car in enumerate(self.cars_line1):
+            rew[i] = car.R
+        for i, car in enumerate(self.cars_line2):
+            rew[i + self.car_num_max] = car.R
+        return rew
 
     def _clear_queue(self):
         while not self.cars_line1_wait_q.empty():
@@ -323,6 +339,8 @@ class Road(gym.Env):
         self.car_end_idx_line2 = None
         self.next_car_interval_line1 = None
         self.next_car_interval_line2 = None
+        self.is_completed = np.zeros(2 * self.car_num_max)
+        self.alive_mask = np.zeros(2 * self.car_num_max)
         self._get_car_dist_list()
         self._init_car_pos_v()
         self.time = 0.
@@ -341,6 +359,7 @@ class Road(gym.Env):
         for i, car in enumerate(self.cars_line2):
             car.f = int(action[i + self.car_num_max])
         # step 2:move cars
+        self.is_completed = np.zeros(2 * self.car_num_max)
         self._move_cars()
         self.time += self.ts
         # step 3:calculate interference
@@ -354,7 +373,8 @@ class Road(gym.Env):
             num_cars_1 += (1 if car.active else 0)
         for car in self.cars_line2:
             num_cars_2 += (1 if car.active else 0)
-        info = {'num_cars_line1': num_cars_1, 'num_cars_line2': num_cars_2}
+        info = {'num_cars_line1': num_cars_1, 'num_cars_line2': num_cars_2, 'alive_mask': self.alive_mask,
+                'is_completed': self.is_completed}
         return obs, rew, done, info
 
     def render(self, mode='human'):
