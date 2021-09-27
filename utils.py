@@ -2,16 +2,23 @@ import numpy as np
 import torch
 import numbers
 
-def select_action(action_out):
-    log_p_a = action_out
-    p_a = [[z.exp() for z in x] for x in log_p_a]
-    ret = torch.stack([torch.stack([torch.multinomial(x, 1).detach() for x in p]) for p in p_a])
-    return ret
+def from_numpy(*args, **kwargs):
+    return torch.from_numpy(*args, **kwargs).float().to('cpu')
 
-def translate_action(action):
-    action = [x.squeeze().data.numpy() for x in action]
-    actual = action                     # attention here : check the tyoe of actual.
-    return action, actual
+def to_numpy(tensor):
+    return tensor.to('cpu').detach().numpy()
+
+def select_action(action_out):
+    log_p_a = action_out[0]
+    p_a = log_p_a.exp()
+    action = [torch.multinomial(x, 1).detach() for x in p_a]            # [tensor(batch * nagents)]
+    return action[0]                                                    # tensor(batch * nagents)
+
+def translate_action(action):                                           # action: tensor(batch * nagents)
+    #action = [x.squeeze().data.numpy() for x in action]
+    action = action.squeeze().data.numpy()
+    actual = action                                                     # attention here : check the tyoe of actual.
+    return action, actual                                               # action: np.array(nagents)
 
 def multinomials_log_densities(actions, log_probs):
     log_prob = [0] * len(log_probs)
@@ -20,11 +27,13 @@ def multinomials_log_densities(actions, log_probs):
     log_prob = torch.cat(log_prob, dim=-1)
     return log_prob
 
-def multinomials_log_density(actions, log_probs):
-    log_prob = 0
-    for i in range(len(log_probs)):
-        log_prob += log_probs[i].gather(1, actions[:, i].long().unsqueeze(1))
-    return log_prob
+def multinomials_log_density(actions, log_probs):                      #actions: (batch * nagents,),
+                                                                       # log_probs: (batch * nagents, nactions)
+    # log_prob = 0
+    # for i in range(len(log_probs)):
+    #     log_prob += log_probs[i].gather(1, actions[:, i].long().unsqueeze(1))
+    ret = log_probs.gather(1, actions.long().unsqueeze(1))
+    return ret
 
 def merge_stat(src, dest):
     for k, v in src.items():

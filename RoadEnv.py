@@ -33,6 +33,7 @@ class Road(gym.Env):
         #np.seed(0)
         self.car_num_max = N
         self.freq_num = M
+        self.observation_dim = 9
         self.d_max = 100.
         self.d_min = 60.
         self.max_pass_cars_num = 30
@@ -286,7 +287,7 @@ class Road(gym.Env):
             obs[i, :] = self._car_state(i, 1)
         for i in range(self.car_num_max):
             obs[i + self.car_num_max, :] = self._car_state(i, 2)
-        return obs
+        return obs[np.newaxis, :]
 
     def _get_reward(self):
         '''
